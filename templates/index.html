@@ -1,18 +1,115 @@
 <!doctype html>
-<html lang="en">
+<html lang="ko">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Document</title>
-    <link rel="stylesheet" href="/static/css/style.css" />
-    <srript src="/static/js/app.js" defer></srript>
+    <title>주식 시세</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+      :root { --up: #e53935; --down: #1e63d6; --bg: #f6f7f9; --card: #fff; --text: #1b1f24; --muted: #6b7280; --line: #e5e7eb; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: system-ui, "Malgun Gothic", sans-serif; background: var(--bg); color: var(--text); }
+      .wrap { max-width: 920px; margin: 0 auto; padding: 24px 16px; }
+      h1 { font-size: 22px; margin: 0 0 4px; }
+      .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: #fff3cd; color: #8a6d00; }
+      .badge.live { background: #e3f6e8; color: #1b7a3a; }
+      form { display: flex; gap: 8px; margin: 16px 0; flex-wrap: wrap; }
+      input, select, button { font-size: 15px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; }
+      button { background: var(--text); color: #fff; cursor: pointer; }
+      .quick button { background: var(--card); color: var(--text); font-size: 13px; padding: 4px 10px; }
+      .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-top: 12px; }
+      .price { font-size: 32px; font-weight: 700; }
+      .up { color: var(--up); } .down { color: var(--down); }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-top: 16px; }
+      .grid div span { display: block; font-size: 12px; color: var(--muted); }
+      .err { color: var(--up); }
+    </style>
   </head>
   <body>
-    <h1 class="title">
-      jinja 테스트2 {{username}} tomato호출! {% for item in items %}
-    </h1>
-    <p>{{item}}</p>
-    {% endfor %}
-    <img src="./static/img/sample1.jpg" />
+    <div class="wrap">
+      <h1>주식 시세 조회</h1>
+      {% if configured %}
+        <span class="badge live">키움 REST API 연결됨 ({{ mode }})</span>
+      {% else %}
+        <span class="badge">샘플 데이터 모드: .env에 키움 API 키를 넣으면 실제 시세가 표시됩니다</span>
+      {% endif %}
+
+      <form id="f">
+        <input id="code" value="005930" maxlength="6" placeholder="종목코드 6자리" />
+        <select id="days">
+          <option value="20">20일</option>
+          <option value="60" selected>60일</option>
+          <option value="120">120일</option>
+        </select>
+        <button>조회</button>
+      </form>
+      <div class="quick">
+        <button data-c="005930">삼성전자</button>
+        <button data-c="000660">SK하이닉스</button>
+        <button data-c="035420">NAVER</button>
+        <button data-c="035720">카카오</button>
+      </div>
+
+      <div class="card" id="info">불러오는 중...</div>
+      <div class="card"><canvas id="chart" height="120"></canvas></div>
+    </div>
+
+    <script>
+      const fmt = (n) => Number(n).toLocaleString("ko-KR");
+      let chart;
+
+      async function load() {
+        const code = document.getElementById("code").value.trim();
+        const days = document.getElementById("days").value;
+        const info = document.getElementById("info");
+        info.textContent = "불러오는 중...";
+        try {
+          const res = await fetch(`/api/stock/${code}?days=${days}`);
+          const d = await res.json();
+          if (!res.ok) throw new Error(d.detail || "조회 실패");
+
+          const cls = d.change > 0 ? "up" : d.change < 0 ? "down" : "";
+          const arrow = d.change > 0 ? "▲" : d.change < 0 ? "▼" : "";
+          info.innerHTML = `
+            <div>${d.name} <small style="color:var(--muted)">${d.code} · ${d.source}</small></div>
+            <div class="price ${cls}">${fmt(d.price)}원</div>
+            <div class="${cls}">${arrow} ${fmt(Math.abs(d.change))} (${d.rate}%)</div>
+            <div class="grid">
+              <div><span>시가</span>${fmt(d.open)}</div>
+              <div><span>고가</span>${fmt(d.high)}</div>
+              <div><span>저가</span>${fmt(d.low)}</div>
+              <div><span>거래량</span>${fmt(d.volume)}</div>
+              <div><span>PER</span>${d.per}</div>
+              <div><span>PBR</span>${d.pbr}</div>
+            </div>`;
+
+          const labels = d.chart.map((r) => `${r.date.slice(4, 6)}/${r.date.slice(6, 8)}`);
+          const color = d.chart.at(-1).close >= d.chart[0].close ? "#e53935" : "#1e63d6";
+          chart?.destroy();
+          chart = new Chart(document.getElementById("chart"), {
+            type: "line",
+            data: {
+              labels,
+              datasets: [{ label: "종가", data: d.chart.map((r) => r.close), borderColor: color,
+                           backgroundColor: color + "22", fill: true, pointRadius: 0, tension: 0.2 }],
+            },
+            options: {
+              interaction: { mode: "index", intersect: false },
+              plugins: { legend: { display: false },
+                         tooltip: { callbacks: { label: (c) => ` ${fmt(c.parsed.y)}원` } } },
+              scales: { y: { ticks: { callback: (v) => fmt(v) } } },
+            },
+          });
+        } catch (e) {
+          info.innerHTML = `<span class="err">${e.message}</span>`;
+        }
+      }
+
+      document.getElementById("f").addEventListener("submit", (e) => { e.preventDefault(); load(); });
+      document.querySelectorAll(".quick button").forEach((b) =>
+        b.addEventListener("click", () => { document.getElementById("code").value = b.dataset.c; load(); })
+      );
+      load();
+    </script>
   </body>
 </html>
